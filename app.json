@@ -10,7 +10,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.pablo.gdcr.liquid-refresh",
       "infoPlist": {
-        "NSMotionUsageDescription": "The water in the pull-to-refresh reacts to how you tilt your phone."
+        "NSMotionUsageDescription": "The water in the pull-to-refresh reacts to how you tilt your phone.",
+        "NSCameraUsageDescription": "Your reflection in the water comes from the front camera."
       }
     },
     "android": {

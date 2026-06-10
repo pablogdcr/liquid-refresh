@@ -14,6 +14,13 @@ textures — just math on a 160×348 grid.
   your finger was. Release velocity sets the strength: set it down
   gently for one soft ring, flick it for a hard splash with secondary
   droplets chasing the first ring. A quick tap is a single raindrop.
+- **The water reflects you** — the front camera (VisionCamera v5)
+  feeds a reflection texture that the waves warp and scatter, like
+  leaning over a pond. On the simulator (no camera) it falls back to a
+  generated night sky with a moon.
+- **A lake with a shore** — the water lives in an organic basin; waves
+  are absorbed at the banks (no harsh edge reflections), the shoreline
+  has wet sand and a waterline glint.
 - **The cards float** — the UI reads wave heights back from the GPU a few
   times a second, so the cards bob and tilt as rings pass beneath them.
 - **The water is above the UI** — the shader knows every card's rounded

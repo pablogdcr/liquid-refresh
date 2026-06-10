@@ -1,14 +1,42 @@
+import { Dimensions } from 'react-native';
 import tgpu, { d, std } from 'typegpu';
 
 // A pure-shader pond: a 2D wave-equation height field, no particles.
 // One compute pass integrates the surface each frame; the fragment
 // shader shades it (normals -> specular glints + refraction).
 //
-// Grid cells are ~2.45pt squares on a 393x852 phone, so rings stay
-// circular. Other aspect ratios distort imperceptibly.
-export const GW = 160;
-export const GH = 348;
+// The grid derives from the screen so cells stay square (~2.5pt) on any
+// device — phone or iPad — and rings stay circular.
+const win = Dimensions.get('window');
+const CELL_PT = 2.5;
+export const GW = Math.round(win.width / CELL_PT);
+export const GH = Math.round(win.height / CELL_PT);
 export const NUM_CELLS = GW * GH;
+
+// The lake: an organic basin with a dry shore around it. Negative SDF
+// = water. Shared by the sim (banks absorb waves) and the renderer
+// (shore material, waterline).
+const SHORE = Math.min(GW, GH) * 0.1;
+const BANK_R = SHORE * 2.2;
+
+export const lakeSdf = (p: d.v2f): number => {
+  'use gpu';
+  const rel = std.sub(p, d.vec2f(GW * 0.5, GH * 0.5));
+  const q = std.sub(
+    std.abs(rel),
+    d.vec2f(GW * 0.5 - SHORE - BANK_R, GH * 0.5 - SHORE - BANK_R),
+  );
+  const sd =
+    std.length(std.max(q, d.vec2f(0, 0))) +
+    std.min(std.max(q.x, q.y), 0) -
+    BANK_R;
+  // Organic banks: low-frequency wobble along the shoreline.
+  const wob =
+    std.sin(p.x * 0.085) * 2.2 +
+    std.sin(p.y * 0.063 + 1.7) * 2.6 +
+    std.sin((p.x + p.y) * 0.041 + 0.6) * 2.0;
+  return sd + wob;
+};
 
 export const MAX_DROPS = 6;
 export const MAX_PROBES = 8;
@@ -42,6 +70,8 @@ export const SimUniforms = d.struct({
   // light direction for shading (tilt-driven on device)
   lightDir: d.vec2f,
   time: d.f32,
+  // 0..1 — how strongly the sky/camera reflection shows on the water
+  reflect: d.f32,
 });
 
 export const DropArray = d.arrayOf(Drop, MAX_DROPS);
@@ -61,6 +91,10 @@ export const renderLayout = tgpu.bindGroupLayout({
   uni: { uniform: SimUniforms },
   h: { storage: HeightField, access: 'readonly' },
   rects: { uniform: RectArray },
+  // What the water mirrors: the front camera on device, a procedural
+  // night sky on the simulator.
+  reflection: { texture: 'float' },
+  samp: { sampler: 'filtering' },
 });
 
 export const probeLayout = tgpu.bindGroupLayout({
@@ -92,27 +126,33 @@ export const updateField = (idx: number) => {
     computeLayout.$.hSrc[cellIndex(x, y + 1)] -
     4 * hC;
 
+  const p = d.vec2f(d.f32(x), d.f32(y));
+  // 1 in open water, 0 on the shore — banks absorb waves instead of
+  // reflecting them, and the finger can't disturb dry land.
+  const sd = lakeSdf(p);
+  const inside = std.smoothstep(1.5, -1.5, sd);
+
   let v = (computeLayout.$.vel[idx] + uni.k * lap) * uni.dampV;
+  v = v * std.mix(0.86, 1, inside);
 
   // Drops: each one kicks the surface with a gaussian impulse.
-  const p = d.vec2f(d.f32(x), d.f32(y));
   for (let i = 0; i < MAX_DROPS; i++) {
     if (d.f32(i) < uni.dropCount) {
       const drop = computeLayout.$.drops[i];
       const dv = std.sub(p, drop.pos);
       const g = std.exp(-std.dot(dv, dv) / (drop.radius * drop.radius));
-      v -= drop.amp * g;
+      v -= drop.amp * g * inside;
     }
   }
 
   computeLayout.$.vel[idx] = v;
-  let nh = hC + v;
+  let nh = (hC + v) * std.mix(0.92, 1, inside);
 
   // The held "rock": surface tension dent that deepens with the pull.
   if (uni.dimple.z > 0.001) {
     const dd = std.sub(p, d.vec2f(uni.dimple.x, uni.dimple.y));
     const g = std.exp(-std.dot(dd, dd) / (uni.dimple.w * uni.dimple.w));
-    nh = std.mix(nh, -uni.dimple.z, g * 0.22);
+    nh = std.mix(nh, -uni.dimple.z, g * 0.22 * inside);
   }
 
   computeLayout.$.hDst[idx] = nh;

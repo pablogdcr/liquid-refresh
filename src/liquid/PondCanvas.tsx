@@ -16,6 +16,7 @@ import {
   GH,
   GW,
   heightBilinear,
+  lakeSdf,
   MAX_DROPS,
   MAX_PROBES,
   MAX_RECTS,
@@ -61,12 +62,20 @@ export interface PondState {
   light: { x: number; y: number };
   /** UI elements the water flows over (translucent there). */
   uiRects: UiRectSpec[];
+  /** What the water mirrors (camera frame or generated sky), BGRA bytes
+   * at REFLECTION_W x REFLECTION_H. Set dirty after writing new data. */
+  reflection: { data: Uint8Array | null; dirty: boolean };
+  /** 0..1 — how visible the reflection is. */
+  reflectStrength: number;
 }
+
+export const REFLECTION_W = 640;
+export const REFLECTION_H = 480;
 
 interface PondCanvasProps {
   stateRef: RefObject<PondState>;
   /** Normalized screen positions whose wave height is reported back. */
-  probes: ReadonlyArray<{ x: number; y: number }>;
+  probes?: ReadonlyArray<{ x: number; y: number }>;
   /** Called with one height per probe, a few times per second. */
   onWave?: (heights: number[]) => void;
   style?: StyleProp<ViewStyle>;
@@ -82,7 +91,12 @@ const DAMP_V = 0.9925;
 const slowmo = () =>
   (globalThis as unknown as { __SLOWMO?: number }).__SLOWMO ?? 1;
 
-export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps) {
+export function PondCanvas({
+  stateRef,
+  probes = [],
+  onWave,
+  style,
+}: PondCanvasProps) {
   const root = useRoot();
 
   // Explicit zero-init: the RN WebGPU runtime hands out buffers with
@@ -119,6 +133,26 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
       r: 0,
     })),
   });
+  const reflTex = useMemo(
+    () =>
+      root
+        .createTexture({
+          size: [REFLECTION_W, REFLECTION_H],
+          format: 'bgra8unorm',
+        })
+        .$usage('sampled'),
+    [root],
+  );
+  const reflSampler = useMemo(
+    () =>
+      root['~unstable'].createSampler({
+        magFilter: 'linear',
+        minFilter: 'linear',
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge',
+      }),
+    [root],
+  );
   const uni = useUniform(SimUniforms, {
     initial: {
       k: WAVE_K,
@@ -127,6 +161,7 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
       dimple: d.vec4f(0, 0, 0, 1),
       lightDir: d.vec2f(-0.45, -0.7),
       time: 0,
+      reflect: 0,
     },
   });
 
@@ -148,11 +183,15 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
     uni: uni.buffer,
     h: hA.buffer,
     rects: rects.buffer,
+    reflection: reflTex,
+    samp: reflSampler,
   });
   const renderB = useBindGroup(renderLayout, {
     uni: uni.buffer,
     h: hB.buffer,
     rects: rects.buffer,
+    reflection: reflTex,
+    samp: reflSampler,
   });
   const probeA = useBindGroup(probeLayout, {
     h: hA.buffer,
@@ -183,6 +222,7 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
           const uniR = renderLayout.$.uni;
           const px = uv.x * GW;
           const py = uv.y * GH;
+          const pg = d.vec2f(px, py);
 
           const hL = heightBilinear(px - 1.5, py);
           const hR = heightBilinear(px + 1.5, py);
@@ -193,17 +233,37 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
           // Surface normal from the height gradient.
           const n = std.normalize(d.vec3f((hL - hR) * 9, (hU - hD) * 9, 1));
 
-          // Pond floor, refracted by the surface.
-          const ruv = d.vec2f(uv.x + n.x * 0.08, uv.y + n.y * 0.08);
+          const sdL = lakeSdf(pg);
+          const inLake = std.smoothstep(0.6, -1.4, sdL);
+
           const vign =
             1 -
-            0.55 *
+            0.5 *
               std.smoothstep(
-                0.1,
+                0.12,
                 0.85,
-                std.length(d.vec2f(ruv.x - 0.5, ruv.y - 0.42)),
+                std.length(d.vec2f(uv.x - 0.5, uv.y - 0.45)),
               );
-          let col = std.mul(
+
+          // ---- Shore: warm dark sand with fine grain and a wet band.
+          const grain = std.fract(
+            std.sin(
+              std.dot(std.floor(std.mul(1.9, pg)), d.vec2f(12.9898, 78.233)),
+            ) * 43758.547,
+          );
+          let shore = std.mix(
+            d.vec3f(0.062, 0.055, 0.046),
+            d.vec3f(0.096, 0.085, 0.069),
+            grain * 0.35 + uv.y * 0.25,
+          );
+          shore = std.mul(vign, shore);
+          // Wet sand right at the waterline.
+          const wet = std.smoothstep(7, 0.5, sdL);
+          shore = std.mul(std.mix(1, 0.6, wet * (1 - inLake)), shore);
+
+          // ---- Water: refracted floor, caustics, crests, glints.
+          const ruv = d.vec2f(uv.x + n.x * 0.08, uv.y + n.y * 0.08);
+          let water = std.mul(
             vign,
             std.mix(
               d.vec3f(0.022, 0.066, 0.105),
@@ -212,38 +272,61 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
             ),
           );
 
-          // Faint drifting caustics on the floor.
           const ca =
             std.sin(ruv.x * 21 + uniR.time * 0.35) *
             std.sin(ruv.y * 17 - uniR.time * 0.27);
           const cb =
             std.sin(ruv.x * 9 - uniR.time * 0.2) *
             std.sin(ruv.y * 7 + uniR.time * 0.16);
-          col = std.add(
-            col,
+          water = std.add(
+            water,
             std.mul(
               std.max(0, ca * cb) * 0.035 * vign,
               d.vec3f(0.35, 0.75, 0.7),
             ),
           );
 
-          // Ice tint on wavefront crests so rings read even off-light.
+          // The reflection (front camera / sky), warped by the waves.
+          // Mirrored x like a real reflection; wave normals displace it.
+          const cuv = d.vec2f(
+            std.clamp(1 - uv.x + n.x * 0.35, 0.005, 0.995),
+            std.clamp(uv.y + n.y * 0.35, 0.005, 0.995),
+          );
+          const refl = std.textureSample(
+            renderLayout.$.reflection,
+            renderLayout.$.samp,
+            cuv,
+          );
+          const reflCol = std.mul(
+            d.vec3f(refl.x, refl.y, refl.z),
+            d.vec3f(0.5, 0.58, 0.7),
+          );
+          water = std.mix(water, reflCol, uniR.reflect);
+
+          // Shallows: the bank shows through near the waterline.
+          const shallow = std.smoothstep(-9, -0.5, sdL);
+          water = std.mix(water, std.mul(1.7, shore), shallow * 0.4);
+
           const curv = hL + hR + hU + hD - 4 * hC;
           const crest = std.clamp(-curv * 30, 0, 1);
-          col = std.add(col, std.mul(crest * 0.085, d.vec3f(0.55, 0.8, 1)));
+          water = std.add(water, std.mul(crest * 0.085, d.vec3f(0.55, 0.8, 1)));
 
-          // Specular glints (Blinn) from the tilt-driven light.
           const lightV = std.normalize(
             d.vec3f(uniR.lightDir.x, uniR.lightDir.y, 0.85),
           );
           const half = std.normalize(std.add(lightV, d.vec3f(0, 0, 1)));
           const spec = std.pow(std.max(0, std.dot(n, half)), 90);
-          col = std.add(col, std.mul(spec * 0.55, d.vec3f(0.85, 0.95, 1)));
+          water = std.add(water, std.mul(spec * 0.55, d.vec3f(0.85, 0.95, 1)));
+
+          // ---- Compose: shore outside, water inside, glint at the line.
+          let col = std.mix(shore, water, inLake);
+          const lineGlint = std.smoothstep(1.8, 0.2, std.abs(sdL));
+          col = std.add(col, std.mul(lineGlint * 0.05, d.vec3f(0.7, 0.88, 1)));
 
           // Over UI elements the surface turns translucent: only the
           // water's light (glints, crests) and trough shadows render,
           // so the content reads through like stones under the surface.
-          const ui = uiMask(d.vec2f(px, py));
+          const ui = uiMask(pg);
           const trough = std.clamp(-hC * 1.8, 0, 0.35);
           const overlayRgb = std.add(
             std.mul(spec * 0.55, d.vec3f(0.85, 0.95, 1)),
@@ -263,7 +346,7 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
   );
 
   const { ref, ctxRef } = useConfigureContext({
-    alphaMode: 'premultiplied',
+    alphaMode: 'opaque',
     autoResize: false,
   });
   const parity = useRef(0);
@@ -292,6 +375,12 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
     const s = stateRef.current;
     const slow = slowmo();
     frame.current++;
+
+    // Fresh reflection frame (camera or generated sky)?
+    if (s.reflection.dirty && s.reflection.data) {
+      reflTex.write(s.reflection.data);
+      s.reflection.dirty = false;
+    }
 
     // Feed queued drops to the GPU (up to MAX_DROPS per frame).
     const batch = s.dropQueue.splice(0, MAX_DROPS);
@@ -336,6 +425,7 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
       ),
       lightDir: d.vec2f(s.light.x, s.light.y),
       time: elapsedSeconds / slow,
+      reflect: s.reflectStrength,
     });
 
     const useAB = parity.current === 0;
@@ -365,5 +455,5 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
     ctx.present?.();
   });
 
-  return <Canvas ref={ref} style={style} transparent />;
+  return <Canvas ref={ref} style={style} />;
 }
