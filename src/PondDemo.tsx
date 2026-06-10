@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   Animated,
   Dimensions,
@@ -25,8 +25,7 @@ const SY = GH / H;
 // Water laps a few points past each element's true bounds.
 const RECT_INFLATE = 4;
 
-const TRIGGER_PULL = 120;
-// Where the "rock" lands, in normalized screen coords.
+// Default touch point (used by the capture rig), normalized coords.
 const DROP_X = 0.5;
 const DROP_Y = 0.42;
 
@@ -118,11 +117,7 @@ export function PondDemo() {
       rectBases.current.set(key, { x, y: y + offsetY, w: width, h: height, r });
       rebuildRects();
     };
-  const refreshingRef = useRef(false);
-  const lastTick = useRef(0);
   const lastTouch = useRef({ x: DROP_X * W, y: DROP_Y * H });
-  const [status, setStatus] = useState<'idle' | 'raining' | 'done'>('idle');
-  const [lastRefresh, setLastRefresh] = useState<string | null>(null);
 
   const bobValues = useMemo(
     () =>
@@ -166,39 +161,9 @@ export function PondDemo() {
     pond.current.dropQueue.push({ x, y, amp, radius });
   };
 
-  // NOTE: must be declared BEFORE the pan gesture below — the worklets
-  // Babel plugin snapshots gesture-callback closures at creation time,
-  // so anything referenced inside must already be initialized.
-  const startRefresh = () => {
-    refreshingRef.current = true;
-    setStatus('raining');
-
-    // While "fetching": soft rain across the pond.
-    const slow = captureSlowmo();
-    const rain = setInterval(() => {
-      drop(
-        0.08 + Math.random() * 0.84,
-        0.06 + Math.random() * 0.88,
-        0.12 + Math.random() * 0.22,
-        4.5 + Math.random() * 3,
-      );
-    }, 150 * slow);
-
-    setTimeout(() => {
-      clearInterval(rain);
-      // One last big ring: the "done" signal.
-      drop(DROP_X, DROP_Y, 1.1, 9);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setLastRefresh(
-        new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      );
-      setStatus('done');
-      refreshingRef.current = false;
-    }, 3400 * slow);
-  };
-
   // The finger IS the rock: touching dents the surface, dragging trails
-  // a wake, releasing drops the splash right where the finger was.
+  // a wake, releasing splashes right where the finger was — strength
+  // comes from the release velocity (set down gently vs flick).
   const pan = useMemo(
     () =>
       Gesture.Pan()
@@ -208,7 +173,7 @@ export function PondDemo() {
         .onBegin((e) => {
           pond.current.dimpleX = e.x / W;
           pond.current.dimpleY = e.y / H;
-          pond.current.dimpleAmp = 0.35;
+          pond.current.dimpleAmp = 0.4;
           lastTouch.current = { x: e.x, y: e.y };
         })
         .onUpdate((e) => {
@@ -218,23 +183,11 @@ export function PondDemo() {
 
           pond.current.dimpleX = e.x / W;
           pond.current.dimpleY = e.y / H;
-          const pullProg = refreshingRef.current
-            ? 0
-            : Math.min(1, Math.max(0, e.translationY) / TRIGGER_PULL);
-          pond.current.dimpleAmp = 0.35 + pullProg * 0.45;
 
           // Wake: shed little ripples as the finger moves through.
           if (dist > 4) {
             drop(e.x / W, e.y / H, Math.min(0.22, 0.03 + dist * 0.01), 4);
             lastTouch.current = { x: e.x, y: e.y };
-          }
-
-          const tick = Math.floor(pullProg * 4);
-          if (!refreshingRef.current && tick !== lastTick.current) {
-            lastTick.current = tick;
-            if (tick > 0) {
-              Haptics.selectionAsync();
-            }
           }
         })
         .onFinalize((e) => {
@@ -245,14 +198,15 @@ export function PondDemo() {
 
           const fx = e.x / W;
           const fy = e.y / H;
-          const pull = Math.max(0, e.translationY);
-          const strength = Math.min(1, pull / TRIGGER_PULL);
-          // velocityY is pt/s at release: the "thrown from high" factor.
-          const thrown = Math.min(1, Math.max(0, e.velocityY) / 2400);
-          const amp = 0.18 + strength * 0.7 + thrown * 0.7;
-          drop(fx, fy, amp, 5 + strength * 5 + thrown * 3);
+          // Release speed in any direction: the "thrown from high" factor.
+          const thrown = Math.min(
+            1,
+            Math.hypot(e.velocityX, e.velocityY) / 2400,
+          );
+          const amp = 0.2 + thrown * 1.0;
+          drop(fx, fy, amp, 5 + thrown * 6);
           Haptics.impactAsync(
-            amp > 0.9
+            amp > 0.85
               ? Haptics.ImpactFeedbackStyle.Heavy
               : Haptics.ImpactFeedbackStyle.Light,
           );
@@ -270,10 +224,6 @@ export function PondDemo() {
               Haptics.selectionAsync();
             }, (90 + i * 110) * captureSlowmo());
           }
-
-          if (!refreshingRef.current && pull >= TRIGGER_PULL) {
-            startRefresh();
-          }
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -281,20 +231,21 @@ export function PondDemo() {
 
   useEffect(() => {
     if (__DEV__) {
-      // Capture rig — trigger the full cycle without a gesture.
-      (globalThis as Record<string, unknown>).__startRefresh = () => {
-        pond.current.dropQueue.push({ x: DROP_X, y: DROP_Y, amp: 1.2, radius: 8 });
-        startRefresh();
+      // Capture rig — a few seconds of rain for recordings.
+      (globalThis as Record<string, unknown>).__rain = (seconds = 3) => {
+        const slow = captureSlowmo();
+        const rain = setInterval(() => {
+          drop(
+            0.08 + Math.random() * 0.84,
+            0.06 + Math.random() * 0.88,
+            0.12 + Math.random() * 0.22,
+            4.5 + Math.random() * 3,
+          );
+        }, 150 * slow);
+        setTimeout(() => clearInterval(rain), seconds * 1000 * slow);
       };
     }
   });
-
-  const statusLabel =
-    status === 'raining'
-      ? 'rain…'
-      : lastRefresh
-        ? `still again · ${lastRefresh}`
-        : 'pull to drop';
 
   return (
     <GestureHandlerRootView style={styles.root}>
@@ -309,13 +260,8 @@ export function PondDemo() {
           style={styles.statusPill}
           onLayout={measureRect('pill', 14, HEADER_TOP)}
         >
-          <View
-            style={[
-              styles.statusDot,
-              status === 'raining' && styles.statusDotActive,
-            ]}
-          />
-          <Text style={styles.statusText}>{statusLabel}</Text>
+          <View style={styles.statusDot} />
+          <Text style={styles.statusText}>touch the water</Text>
         </View>
       </View>
 
@@ -421,9 +367,6 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 3,
     backgroundColor: '#6fb6e8',
-  },
-  statusDotActive: {
-    backgroundColor: '#8fd6ff',
   },
   statusText: {
     color: '#8aa3c2',

@@ -1,6 +1,6 @@
-# 💧 still. — Liquid Refresh
+# 💧 still.
 
-A pull-to-refresh that drops a rock into a pond.
+A screen of water you can touch.
 
 The whole screen is a **GPU water surface** — a 2D wave-equation height
 field integrated in a WebGPU compute shader and lit by a fragment shader
@@ -12,11 +12,8 @@ textures — just math on a 160×348 grid.
 - **Your finger is the rock** — touching dents the surface, dragging
   trails a wake through the water, and releasing splashes right where
   your finger was. Release velocity sets the strength: set it down
-  gently for one soft ring, throw it for a hard splash with secondary
+  gently for one soft ring, flick it for a hard splash with secondary
   droplets chasing the first ring. A quick tap is a single raindrop.
-- **Pull down past the threshold** to trigger the refresh.
-- **Refresh = rain** — while "fetching", raindrops ring across the pond,
-  ending with one big ring when it's done.
 - **The cards float** — the UI reads wave heights back from the GPU a few
   times a second, so the cards bob and tilt as rings pass beneath them.
 - **The water is above the UI** — the shader knows every card's rounded
@@ -32,7 +29,7 @@ textures — just math on a 160×348 grid.
 | --- | --- |
 | [`src/liquid/sim.ts`](src/liquid/sim.ts) | TGSL kernels: wave-equation update (laplacian + velocity damping), gaussian drop impulses, the held-rock dimple, probe sampling for UI feedback. |
 | [`src/liquid/PondCanvas.tsx`](src/liquid/PondCanvas.tsx) | Ping-pong height buffers, the lit-water fragment shader (bilinear sampling, Blinn specular, refracted floor + caustics), GPU→JS probe readback. |
-| [`src/PondDemo.tsx`](src/PondDemo.tsx) | The zen screen: floating cards, pull gesture → drop strength mapping (distance + release velocity), rain state machine, haptics. |
+| [`src/PondDemo.tsx`](src/PondDemo.tsx) | The zen screen: floating cards, the finger gesture (dimple → wake → velocity-scaled splash), haptics. |
 
 ## Run it
 
