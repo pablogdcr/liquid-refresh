@@ -1,35 +1,31 @@
-# 💧 Liquid Refresh
+# 💧 still. — Liquid Refresh
 
-The most over-engineered pull-to-refresh in React Native.
+A pull-to-refresh that drops a rock into a pond.
 
-The water is a **real GPU fluid simulation** — 2,000 particles integrated in
-WebGPU compute shaders, with spatial-hash neighbor search, rendered as
-metaballs by a full-screen fragment shader. And every shader is written in
-**TypeScript**, thanks to [TypeGPU](https://docs.swmansion.com/TypeGPU/)'s
-TGSL.
+The whole screen is a **GPU water surface** — a 2D wave-equation height
+field integrated in a WebGPU compute shader and lit by a fragment shader
+(surface normals → specular glints, refraction, drifting caustics). Every
+shader is written in **TypeScript**, thanks to
+[TypeGPU](https://docs.swmansion.com/TypeGPU/)'s TGSL. No particles, no
+textures — just math on a 160×348 grid.
 
-- **Pull to pour** — the pull distance controls how much water rains in from
-  behind the Dynamic Island.
-- **The content sheet is the floor** — the water rests exactly on the top edge
-  of the scroll content and gets shoved around as you drag.
-- **Tilt your phone** — gravity comes from the accelerometer
-  (`expo-sensors` DeviceMotion).
-- **Release to refresh** — the water sloshes while "fetching", then the floor
-  opens and it drains away. With haptics, obviously.
+- **Pull to drop** — while you hold, the surface dimples under the
+  suspended "rock". Release gently and one soft ring glides out; yank it
+  and you get a hard splash with secondary droplets chasing the first ring.
+- **Refresh = rain** — while "fetching", raindrops ring across the pond,
+  ending with one big ring when it's done.
+- **The cards float** — the UI reads wave heights back from the GPU a few
+  times a second, so the cards bob and tilt as rings pass beneath them.
+- **Tilt the phone** — the light source moves, sweeping the glints across
+  the surface (top-down pond, so tilt steers light rather than gravity).
 
 ## How it works
 
 | File | What it does |
 | --- | --- |
-| [`src/liquid/sim.ts`](src/liquid/sim.ts) | All GPU code: particle struct, bind group layouts, and four TGSL kernels — clear grid, bin particles (atomics), SPH-ish force integration, and metaball density sampling. |
-| [`src/liquid/LiquidCanvas.tsx`](src/liquid/LiquidCanvas.tsx) | React component: buffers and pipelines via `@typegpu/react` hooks, two sim substeps + one render pass per frame. |
-| [`src/PullToRefreshDemo.tsx`](src/PullToRefreshDemo.tsx) | The actual pull-to-refresh: scroll tracking, refresh state machine, device motion → gravity vector, haptics. |
-
-The simulation runs in normalized container space. A `floorY` uniform tracks
-the top edge of the scroll content, so the same sim works mid-pull, held open
-during refresh, and draining. Inactive particles are parked above the canvas
-in a staggered column — raising the active count makes them rain in like a
-pour instead of teleporting into place.
+| [`src/liquid/sim.ts`](src/liquid/sim.ts) | TGSL kernels: wave-equation update (laplacian + velocity damping), gaussian drop impulses, the held-rock dimple, probe sampling for UI feedback. |
+| [`src/liquid/PondCanvas.tsx`](src/liquid/PondCanvas.tsx) | Ping-pong height buffers, the lit-water fragment shader (bilinear sampling, Blinn specular, refracted floor + caustics), GPU→JS probe readback. |
+| [`src/PondDemo.tsx`](src/PondDemo.tsx) | The zen screen: floating cards, pull gesture → drop strength mapping (distance + release velocity), rain state machine, haptics. |
 
 ## Run it
 
@@ -41,12 +37,13 @@ npx expo run:ios
 
 Notes:
 
-- Expo Go is not supported (`react-native-wgpu` is a native module) — you need
-  the prebuild + run flow above.
+- Expo Go is not supported (`react-native-wgpu` is a native module).
 - If you run from Xcode, disable **Metal API Validation** in the scheme's
   Diagnostics tab (see the [TypeGPU React Native guide](https://docs.swmansion.com/TypeGPU/integration/react-native/)).
-- Tilt gravity needs a physical device; the simulator falls back to straight
-  down.
+- The iOS **simulator** throttles canvas presents to ~15fps regardless of
+  GPU load — judge smoothness on a device. For smooth simulator captures
+  there's a slow-motion rig: set `globalThis.__SLOWMO = 4` via the
+  debugger, record, then speed the video 4× (`ffmpeg setpts=PTS/4`).
 
 ## Stack
 
