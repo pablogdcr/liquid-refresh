@@ -25,6 +25,9 @@ export const SimUniforms = d.struct({
   aspect: d.f32,
   activeCount: d.f32,
   drainOpen: d.f32,
+  // Water floor in world space (0..1) — tracks the top edge of the
+  // scroll content so the water rests exactly in the revealed gap.
+  floorY: d.f32,
   dt: d.f32,
 });
 
@@ -95,7 +98,7 @@ export const simulate = (idx: number) => {
     return;
   }
 
-  let force = uni.gravity;
+  let force = d.vec2f(uni.gravity);
   const c = cellCoord(p.pos);
 
   for (let dy = -1; dy <= 1; dy++) {
@@ -146,8 +149,8 @@ export const simulate = (idx: number) => {
     vel.x = -std.abs(vel.x) * WALL_BOUNCE;
   }
   if (uni.drainOpen < 0.5) {
-    if (pos.y > 1 - MARGIN) {
-      pos.y = 1 - MARGIN;
+    if (pos.y > uni.floorY - MARGIN) {
+      pos.y = uni.floorY - MARGIN;
       vel.y = -std.abs(vel.y) * WALL_BOUNCE;
     }
   } else if (pos.y > 1.5) {
@@ -157,8 +160,8 @@ export const simulate = (idx: number) => {
     vel = d.vec2f(0, 0);
   }
 
-  p.pos = pos;
-  p.vel = vel;
+  p.pos = d.vec2f(pos);
+  p.vel = d.vec2f(vel);
 };
 
 export const sampleDensity = (world: d.v2f): number => {

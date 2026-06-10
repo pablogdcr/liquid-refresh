@@ -28,6 +28,8 @@ import {
 export interface LiquidState {
   /** 0..1 — fraction of the water volume that should be in the container. */
   fill: number;
+  /** 0..1 — where the floor of the container sits, as a fraction of canvas height. */
+  floor: number;
   /** When true the floor opens and the water drains out of view. */
   drainOpen: boolean;
   /** Unit-ish gravity direction in canvas space (x right, y down). */
@@ -39,8 +41,8 @@ interface LiquidCanvasProps {
   style?: StyleProp<ViewStyle>;
 }
 
-const SUBSTEPS = 4;
-const DT = 1 / 240;
+const SUBSTEPS = 2;
+const DT = 1 / 120;
 
 export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
   const root = useRoot();
@@ -54,6 +56,7 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
       aspect: 1,
       activeCount: 0,
       drainOpen: 0,
+      floorY: 1,
       dt: DT,
     },
   });
@@ -90,7 +93,7 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
         fragment: ({ uv }) => {
           'use gpu';
           const aspect = renderLayout.$.uni.aspect;
-          const world = d.vec2f(uv.x * aspect, 1 - uv.y);
+          const world = d.vec2f(uv.x * aspect, uv.y);
           const density = sampleDensity(world);
 
           const water = std.smoothstep(0.55, 0.8, density);
@@ -135,6 +138,7 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
       aspect,
       activeCount: Math.round(smoothFill.current * N_PARTICLES),
       drainOpen: s.drainOpen ? 1 : 0,
+      floorY: Math.max(0.05, Math.min(1, s.floor)),
       dt: DT,
     });
 
