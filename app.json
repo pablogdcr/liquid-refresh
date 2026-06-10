@@ -8,7 +8,10 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.pablo.gdcr.liquid-refresh"
+      "bundleIdentifier": "com.pablo.gdcr.liquid-refresh",
+      "infoPlist": {
+        "NSMotionUsageDescription": "The water in the pull-to-refresh reacts to how you tilt your phone."
+      }
     },
     "android": {
       "adaptiveIcon": {

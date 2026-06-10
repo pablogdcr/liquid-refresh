@@ -19,6 +19,8 @@ const DAMPING = 0.999;
 const V_MAX = 3;
 const WALL_BOUNCE = 0.3;
 const MARGIN = 0.02;
+// Keep the water surface flush with the content sheet below it.
+const FLOOR_MARGIN = 0.005;
 
 export const SimUniforms = d.struct({
   gravity: d.vec2f,
@@ -78,7 +80,7 @@ export const binParticles = (idx: number) => {
   const c = cellCoord(p.pos);
   const cellIdx = c.y * GX + c.x;
   const k = std.atomicAdd(computeLayout.$.counts[cellIdx], 1);
-  if (k < MAX_PER_CELL) {
+  if (k < d.u32(MAX_PER_CELL)) {
     computeLayout.$.slots[cellIdx * MAX_PER_CELL + k] = idx;
   }
 };
@@ -149,8 +151,8 @@ export const simulate = (idx: number) => {
     vel.x = -std.abs(vel.x) * WALL_BOUNCE;
   }
   if (uni.drainOpen < 0.5) {
-    if (pos.y > uni.floorY - MARGIN) {
-      pos.y = uni.floorY - MARGIN;
+    if (pos.y > uni.floorY - FLOOR_MARGIN) {
+      pos.y = uni.floorY - FLOOR_MARGIN;
       vel.y = -std.abs(vel.y) * WALL_BOUNCE;
     }
   } else if (pos.y > 1.5) {
