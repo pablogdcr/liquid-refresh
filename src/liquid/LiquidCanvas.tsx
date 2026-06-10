@@ -58,6 +58,7 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
       drainOpen: 0,
       floorY: 1,
       dt: DT,
+      time: 0,
     },
   });
 
@@ -92,20 +93,66 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
         vertex: common.fullScreenTriangle,
         fragment: ({ uv }) => {
           'use gpu';
-          const aspect = renderLayout.$.uni.aspect;
-          const world = d.vec2f(uv.x * aspect, uv.y);
+          const uniR = renderLayout.$.uni;
+          const world = d.vec2f(uv.x * uniR.aspect, uv.y);
           const density = sampleDensity(world);
 
-          const water = std.smoothstep(0.55, 0.8, density);
-          const deep = d.vec3f(0.02, 0.35, 0.72);
-          const shallow = d.vec3f(0.3, 0.72, 0.98);
-          const body = std.mix(shallow, deep, std.clamp(density - 0.8, 0, 1));
-          const foam =
-            std.smoothstep(0.55, 0.7, density) *
-            (1 - std.smoothstep(0.9, 1.3, density));
-          const col = std.add(body, std.mul(foam * 0.35, d.vec3f(0.9, 0.95, 1)));
-          const alpha = water * 0.92;
-          return d.vec4f(std.mul(alpha, col), alpha);
+          // Screen-space surface normal from the density gradient —
+          // cheap derivatives instead of extra density taps.
+          const grad = d.vec2f(std.dpdx(density), std.dpdy(density));
+          const gradLen = std.max(std.length(grad), 1e-4);
+          const n = std.mul(-1 / gradLen, grad);
+
+          const mask = std.smoothstep(0.5, 0.74, density);
+          // Saturates quickly so the particle lattice inside the body
+          // doesn't show through as a dot pattern.
+          const depth = std.smoothstep(0.58, 1.2, density);
+
+          // Liquid glass body: ice cyan at the surface, rich blue core.
+          const ice = d.vec3f(0.5, 0.8, 1.0);
+          const deepBlue = d.vec3f(0.06, 0.3, 0.68);
+          const abyss = d.vec3f(0.02, 0.12, 0.36);
+          let col = std.mix(ice, deepBlue, depth);
+
+          // Vertical depth gradient toward the floor — masks any leftover
+          // interior texture and reads as real water depth.
+          const vd = std.smoothstep(uniR.floorY - 0.55, uniR.floorY, world.y);
+          col = std.mix(col, abyss, vd * 0.45);
+
+          // Crisp specular from a top-left light — gated to real surface
+          // edges (large gradient + low density), so the interior stays
+          // calm instead of sparkling like foam.
+          const edge =
+            std.smoothstep(0.015, 0.05, gradLen) *
+            (1 - std.smoothstep(0.8, 1.0, density));
+          const lightDir = std.normalize(d.vec2f(-0.55, -0.83));
+          const ndl = std.max(0, std.dot(n, lightDir));
+          const spec = std.pow(ndl, 24) * edge;
+          col = std.add(col, std.mul(spec * 0.7, d.vec3f(0.95, 0.99, 1)));
+
+          // Thin bright rim hugging the surface.
+          const rim =
+            std.smoothstep(0.5, 0.58, density) *
+            (1 - std.smoothstep(0.58, 0.78, density));
+          col = std.add(col, std.mul(rim * 0.5, d.vec3f(0.75, 0.93, 1)));
+
+          // Subtle internal shimmer so the body never reads as flat.
+          const shimmer =
+            std.sin(world.x * 26 + uniR.time * 1.8) *
+            std.sin(world.y * 21 - uniR.time * 1.3);
+          col = std.add(col, std.mul(shimmer * 0.035 * depth, d.vec3f(0.6, 0.9, 1)));
+
+          // Glassy translucency: shallow water lets the background through.
+          const alpha = mask * std.mix(0.78, 0.97, depth);
+
+          // Soft cyan halo around droplets and the surface.
+          const halo = std.smoothstep(0.1, 0.5, density) * (1 - mask) * 0.16;
+
+          const rgb = std.add(
+            std.mul(alpha, col),
+            std.mul(halo, d.vec3f(0.45, 0.75, 1)),
+          );
+          return d.vec4f(rgb, std.min(1, alpha + halo));
         },
       }),
     [root],
@@ -114,7 +161,7 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
   const { ref, ctxRef } = useConfigureContext({ alphaMode: 'premultiplied' });
   const smoothFill = useRef(0);
 
-  useFrame(({ deltaSeconds }) => {
+  useFrame(({ deltaSeconds, elapsedSeconds }) => {
     const ctx = ctxRef.current;
     if (!ctx) {
       return;
@@ -140,6 +187,7 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
       drainOpen: s.drainOpen ? 1 : 0,
       floorY: Math.max(0.05, Math.min(1, s.floor)),
       dt: DT,
+      time: elapsedSeconds,
     });
 
     for (let i = 0; i < SUBSTEPS; i++) {

@@ -19,16 +19,27 @@ const TRIGGER_PULL = 130;
 // resting water level around half the header.
 const FILL_TARGET = 0.6;
 
-const FEED = [
-  ['🌊', 'GPU fluid simulation', '2,000 particles, spatial hashing, 4 substeps per frame'],
-  ['⚡️', 'Shaders in TypeScript', "TGSL — the same language as the rest of the app"],
-  ['📱', 'Runs on iOS and Android', 'WebGPU via react-native-wgpu (Metal / Vulkan)'],
-  ['🌀', 'Tilt your phone', 'Gravity comes from the accelerometer'],
-  ['💧', 'Pull to pour', 'The pull distance controls how much water pours in'],
-  ['🕳', 'Release to refresh', 'The floor opens and the water drains out'],
-  ['🧪', 'TypeGPU', 'Type-safe WebGPU toolkit by Software Mansion'],
-  ['🚀', 'Over-engineered?', 'Absolutely.'],
-] as const;
+const ACCENTS = {
+  cyan: '#5ad1ff',
+  blue: '#5a8cff',
+  violet: '#9b7bff',
+  teal: '#4fe3c1',
+  amber: '#ffc46b',
+  rose: '#ff7ba9',
+} as const;
+
+const FEED: ReadonlyArray<
+  readonly [emoji: string, title: string, body: string, accent: keyof typeof ACCENTS]
+> = [
+  ['🌊', 'GPU fluid simulation', '2,000 particles · spatial hashing · 120 Hz', 'cyan'],
+  ['⚡️', 'Shaders in TypeScript', 'TGSL — the same language as the rest of the app', 'amber'],
+  ['📱', 'Runs on iOS and Android', 'WebGPU via react-native-wgpu (Metal / Vulkan)', 'blue'],
+  ['🌀', 'Tilt your phone', 'Gravity comes from the accelerometer', 'violet'],
+  ['💧', 'Pull to pour', 'The pull distance controls how much water pours in', 'teal'],
+  ['🕳', 'Release to refresh', 'The floor opens and the water drains out', 'rose'],
+  ['🧪', 'TypeGPU', 'Type-safe WebGPU toolkit by Software Mansion', 'cyan'],
+  ['🚀', 'Over-engineered?', 'Absolutely.', 'amber'],
+];
 
 export function PullToRefreshDemo() {
   const liquid = useRef<LiquidState>({
@@ -95,14 +106,16 @@ export function PullToRefreshDemo() {
     refreshingRef.current = true;
     setRefreshing(true);
     liquid.current.fill = FILL_TARGET;
-    liquid.current.floor = (HEADER_HEIGHT - 60) / HEADER_HEIGHT;
+    liquid.current.floor = (HEADER_HEIGHT - 56) / HEADER_HEIGHT;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     // Pretend to fetch something while the water sloshes around.
     setTimeout(() => {
       liquid.current.drainOpen = true;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setLastRefresh(new Date().toLocaleTimeString());
+      setLastRefresh(
+        new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      );
 
       setTimeout(() => {
         liquid.current.fill = 0;
@@ -110,8 +123,8 @@ export function PullToRefreshDemo() {
         liquid.current.drainOpen = false;
         refreshingRef.current = false;
         setRefreshing(false);
-      }, 1200);
-    }, 2400);
+      }, 1300);
+    }, 3200);
   };
 
   return (
@@ -121,28 +134,42 @@ export function PullToRefreshDemo() {
       </View>
       <ScrollView
         style={styles.scroll}
-        contentInset={{ top: refreshing ? HEADER_HEIGHT - 60 : 0 }}
+        contentInset={{ top: refreshing ? HEADER_HEIGHT - 56 : 0 }}
         scrollEventThrottle={16}
         onScroll={onScroll}
         onScrollEndDrag={onRelease}
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.content}>
-          <Text style={styles.title}>Liquid Refresh</Text>
-          <Text style={styles.subtitle}>
-            {lastRefresh
-              ? `Last refreshed at ${lastRefresh}`
-              : 'Pull down to pour ↓'}
+          <View style={styles.statusRow}>
+            <View style={styles.statusPill}>
+              <View style={styles.statusDot} />
+              <Text style={styles.statusText}>
+                {lastRefresh ? `Refreshed ${lastRefresh}` : 'Pull to pour'}
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.title}>
+            Liquid Refresh<Text style={styles.titleAccent}>.</Text>
           </Text>
-          {FEED.map(([emoji, title, body]) => (
+          <Text style={styles.subtitle}>
+            A real fluid simulation in your pull-to-refresh — shaders written
+            in TypeScript.
+          </Text>
+          {FEED.map(([emoji, title, body, accent]) => (
             <View key={title} style={styles.card}>
-              <Text style={styles.cardEmoji}>{emoji}</Text>
+              <View
+                style={[styles.cardChip, { backgroundColor: `${ACCENTS[accent]}1c` }]}
+              >
+                <Text style={styles.cardEmoji}>{emoji}</Text>
+              </View>
               <View style={styles.cardText}>
                 <Text style={styles.cardTitle}>{title}</Text>
                 <Text style={styles.cardBody}>{body}</Text>
               </View>
             </View>
           ))}
+          <Text style={styles.footer}>typegpu · react-native-wgpu · expo</Text>
         </View>
       </ScrollView>
     </View>
@@ -152,7 +179,7 @@ export function PullToRefreshDemo() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#0b1220',
+    backgroundColor: '#05070d',
   },
   header: {
     position: 'absolute',
@@ -166,46 +193,95 @@ const styles = StyleSheet.create({
   },
   content: {
     minHeight: '100%',
-    backgroundColor: '#0b1220',
-    paddingTop: 76,
+    backgroundColor: '#05070d',
+    paddingTop: 72,
     paddingHorizontal: 20,
-    paddingBottom: 60,
+    paddingBottom: 64,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    marginBottom: 14,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(159, 216, 255, 0.28)',
+    backgroundColor: 'rgba(90, 209, 255, 0.07)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    gap: 7,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#5ad1ff',
+  },
+  statusText: {
+    color: '#9fc6e8',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.3,
   },
   title: {
-    color: '#f2f6ff',
-    fontSize: 32,
+    color: '#f4f8ff',
+    fontSize: 36,
     fontWeight: '800',
-    letterSpacing: -0.5,
+    letterSpacing: -0.8,
+  },
+  titleAccent: {
+    color: '#5ad1ff',
   },
   subtitle: {
-    color: '#7e93b8',
+    color: '#62768f',
     fontSize: 15,
-    marginTop: 4,
-    marginBottom: 20,
+    lineHeight: 21,
+    marginTop: 8,
+    marginBottom: 24,
   },
   card: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#121d33',
-    borderRadius: 16,
+    backgroundColor: 'rgba(13, 21, 36, 0.72)',
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(159, 216, 255, 0.1)',
     padding: 16,
     marginBottom: 12,
   },
-  cardEmoji: {
-    fontSize: 28,
+  cardChip: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 14,
+  },
+  cardEmoji: {
+    fontSize: 20,
   },
   cardText: {
     flex: 1,
   },
   cardTitle: {
-    color: '#e8eefb',
+    color: '#e9f1fd',
     fontSize: 16,
     fontWeight: '600',
+    letterSpacing: -0.2,
   },
   cardBody: {
-    color: '#7e93b8',
+    color: '#62768f',
     fontSize: 13,
-    marginTop: 2,
+    lineHeight: 18,
+    marginTop: 3,
+  },
+  footer: {
+    color: '#3b4a61',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 20,
+    letterSpacing: 0.4,
   },
 });

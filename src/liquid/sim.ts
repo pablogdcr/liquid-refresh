@@ -31,6 +31,7 @@ export const SimUniforms = d.struct({
   // scroll content so the water rests exactly in the revealed gap.
   floorY: d.f32,
   dt: d.f32,
+  time: d.f32,
 });
 
 export const Particle = d.struct({
