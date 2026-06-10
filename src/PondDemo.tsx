@@ -166,6 +166,37 @@ export function PondDemo() {
     pond.current.dropQueue.push({ x, y, amp, radius });
   };
 
+  // NOTE: must be declared BEFORE the pan gesture below — the worklets
+  // Babel plugin snapshots gesture-callback closures at creation time,
+  // so anything referenced inside must already be initialized.
+  const startRefresh = () => {
+    refreshingRef.current = true;
+    setStatus('raining');
+
+    // While "fetching": soft rain across the pond.
+    const slow = captureSlowmo();
+    const rain = setInterval(() => {
+      drop(
+        0.08 + Math.random() * 0.84,
+        0.06 + Math.random() * 0.88,
+        0.12 + Math.random() * 0.22,
+        4.5 + Math.random() * 3,
+      );
+    }, 150 * slow);
+
+    setTimeout(() => {
+      clearInterval(rain);
+      // One last big ring: the "done" signal.
+      drop(DROP_X, DROP_Y, 1.1, 9);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setLastRefresh(
+        new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      );
+      setStatus('done');
+      refreshingRef.current = false;
+    }, 3400 * slow);
+  };
+
   // The finger IS the rock: touching dents the surface, dragging trails
   // a wake, releasing drops the splash right where the finger was.
   const pan = useMemo(
@@ -247,34 +278,6 @@ export function PondDemo() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
-
-  const startRefresh = () => {
-    refreshingRef.current = true;
-    setStatus('raining');
-
-    // While "fetching": soft rain across the pond.
-    const slow = captureSlowmo();
-    const rain = setInterval(() => {
-      drop(
-        0.08 + Math.random() * 0.84,
-        0.06 + Math.random() * 0.88,
-        0.12 + Math.random() * 0.22,
-        4.5 + Math.random() * 3,
-      );
-    }, 150 * slow);
-
-    setTimeout(() => {
-      clearInterval(rain);
-      // One last big ring: the "done" signal.
-      drop(DROP_X, DROP_Y, 1.1, 9);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setLastRefresh(
-        new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      );
-      setStatus('done');
-      refreshingRef.current = false;
-    }, 3400 * slow);
-  };
 
   useEffect(() => {
     if (__DEV__) {

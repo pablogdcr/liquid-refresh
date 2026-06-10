@@ -9,13 +9,20 @@ shader is written in **TypeScript**, thanks to
 [TypeGPU](https://docs.swmansion.com/TypeGPU/)'s TGSL. No particles, no
 textures — just math on a 160×348 grid.
 
-- **Pull to drop** — while you hold, the surface dimples under the
-  suspended "rock". Release gently and one soft ring glides out; yank it
-  and you get a hard splash with secondary droplets chasing the first ring.
+- **Your finger is the rock** — touching dents the surface, dragging
+  trails a wake through the water, and releasing splashes right where
+  your finger was. Release velocity sets the strength: set it down
+  gently for one soft ring, throw it for a hard splash with secondary
+  droplets chasing the first ring. A quick tap is a single raindrop.
+- **Pull down past the threshold** to trigger the refresh.
 - **Refresh = rain** — while "fetching", raindrops ring across the pond,
   ending with one big ring when it's done.
 - **The cards float** — the UI reads wave heights back from the GPU a few
   times a second, so the cards bob and tilt as rings pass beneath them.
+- **The water is above the UI** — the shader knows every card's rounded
+  rect (measured via `onLayout`, bob offsets included) and switches from
+  opaque pond to a translucent lighting overlay there, so glints and
+  wave shadows play over the content while it stays readable.
 - **Tilt the phone** — the light source moves, sweeping the glints across
   the surface (top-down pond, so tilt steers light rather than gravity).
 
