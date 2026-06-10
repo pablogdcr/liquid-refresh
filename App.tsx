@@ -1,13 +1,13 @@
 import { StatusBar } from 'expo-status-bar';
 import { Suspense } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { PullToRefreshDemo } from './src/PullToRefreshDemo';
+import { PumpDemo } from './src/PumpDemo';
 
 export default function App() {
   return (
     <View style={styles.container}>
       <Suspense fallback={<Text style={styles.loading}>Initializing GPU…</Text>}>
-        <PullToRefreshDemo />
+        <PumpDemo />
       </Suspense>
       <StatusBar style="light" />
     </View>
