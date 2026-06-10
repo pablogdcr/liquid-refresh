@@ -18,13 +18,16 @@ import {
   heightBilinear,
   MAX_DROPS,
   MAX_PROBES,
+  MAX_RECTS,
   NUM_CELLS,
   ProbeOut,
   ProbePoints,
   probeLayout,
   readProbes,
+  RectArray,
   renderLayout,
   SimUniforms,
+  uiMask,
   updateField,
 } from './sim';
 
@@ -38,6 +41,15 @@ export interface DropRequest {
   radius: number;
 }
 
+export interface UiRectSpec {
+  /** all in grid coordinates */
+  cx: number;
+  cy: number;
+  hw: number;
+  hh: number;
+  r: number;
+}
+
 export interface PondState {
   /** Drops to inject — consumed (cleared) by the canvas each frame. */
   dropQueue: DropRequest[];
@@ -47,6 +59,8 @@ export interface PondState {
   dimpleY: number;
   /** Unit-ish light direction (tilt-driven on device). */
   light: { x: number; y: number };
+  /** UI elements the water flows over (translucent there). */
+  uiRects: UiRectSpec[];
 }
 
 interface PondCanvasProps {
@@ -60,7 +74,7 @@ interface PondCanvasProps {
 
 const RESOLUTION_SCALE = 0.5;
 const WAVE_K = 0.3;
-const DAMP_V = 0.995;
+const DAMP_V = 0.9925;
 
 // Capture rig: the iOS simulator throttles canvas presents to ~15fps no
 // matter the workload. Setting `globalThis.__SLOWMO = 4` slows the wave
@@ -98,6 +112,13 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
       radius: 1,
     })),
   });
+  const rects = useUniform(RectArray, {
+    initial: Array.from({ length: MAX_RECTS }, () => ({
+      center: d.vec2f(0, 0),
+      half: d.vec2f(0, 0),
+      r: 0,
+    })),
+  });
   const uni = useUniform(SimUniforms, {
     initial: {
       k: WAVE_K,
@@ -123,8 +144,16 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
     hDst: hA.buffer,
     vel: vel.buffer,
   });
-  const renderA = useBindGroup(renderLayout, { uni: uni.buffer, h: hA.buffer });
-  const renderB = useBindGroup(renderLayout, { uni: uni.buffer, h: hB.buffer });
+  const renderA = useBindGroup(renderLayout, {
+    uni: uni.buffer,
+    h: hA.buffer,
+    rects: rects.buffer,
+  });
+  const renderB = useBindGroup(renderLayout, {
+    uni: uni.buffer,
+    h: hB.buffer,
+    rects: rects.buffer,
+  });
   const probeA = useBindGroup(probeLayout, {
     h: hA.buffer,
     pts: probePts.buffer,
@@ -211,14 +240,30 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
           const spec = std.pow(std.max(0, std.dot(n, half)), 90);
           col = std.add(col, std.mul(spec * 0.55, d.vec3f(0.85, 0.95, 1)));
 
-          return d.vec4f(col, 1);
+          // Over UI elements the surface turns translucent: only the
+          // water's light (glints, crests) and trough shadows render,
+          // so the content reads through like stones under the surface.
+          const ui = uiMask(d.vec2f(px, py));
+          const trough = std.clamp(-hC * 1.8, 0, 0.35);
+          const overlayRgb = std.add(
+            std.mul(spec * 0.55, d.vec3f(0.85, 0.95, 1)),
+            std.mul(crest * 0.1, d.vec3f(0.55, 0.8, 1)),
+          );
+          const overlayA = std.clamp(
+            spec * 0.6 + crest * 0.3 + trough,
+            0,
+            0.85,
+          );
+
+          const rgb = std.mix(col, overlayRgb, ui);
+          return d.vec4f(rgb, std.mix(1, overlayA, ui));
         },
       }),
     [root],
   );
 
   const { ref, ctxRef } = useConfigureContext({
-    alphaMode: 'opaque',
+    alphaMode: 'premultiplied',
     autoResize: false,
   });
   const parity = useRef(0);
@@ -265,6 +310,19 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
       );
     }
 
+    rects.write(
+      Array.from({ length: MAX_RECTS }, (_, i) => {
+        const rc = s.uiRects[i];
+        return rc
+          ? {
+              center: d.vec2f(rc.cx, rc.cy),
+              half: d.vec2f(rc.hw, rc.hh),
+              r: rc.r,
+            }
+          : { center: d.vec2f(0, 0), half: d.vec2f(0, 0), r: 0 };
+      }),
+    );
+
     uni.write({
       // wave speed goes with sqrt(k): slow-mo needs k / slow^2
       k: WAVE_K / (slow * slow),
@@ -307,5 +365,5 @@ export function PondCanvas({ stateRef, probes, onWave, style }: PondCanvasProps)
     ctx.present?.();
   });
 
-  return <Canvas ref={ref} style={style} />;
+  return <Canvas ref={ref} style={style} transparent />;
 }

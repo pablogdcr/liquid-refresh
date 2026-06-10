@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   ScrollView,
@@ -11,9 +12,16 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { DeviceMotion } from 'expo-sensors';
-import { PondCanvas, type PondState } from './liquid/PondCanvas';
+import { PondCanvas, type PondState, type UiRectSpec } from './liquid/PondCanvas';
+import { GH, GW } from './liquid/sim';
 
 const { width: W, height: H } = Dimensions.get('window');
+const HEADER_TOP = H * 0.11;
+// pt -> grid cell scale (cells are square)
+const SX = GW / W;
+const SY = GH / H;
+// Water laps a few points past each element's true bounds.
+const RECT_INFLATE = 4;
 
 const TRIGGER_PULL = 120;
 // Where the "rock" lands, in normalized screen coords.
@@ -77,7 +85,37 @@ export function PondDemo() {
     dimpleX: DROP_X,
     dimpleY: DROP_Y,
     light: { x: -0.45, y: -0.7 },
+    uiRects: [],
   });
+  const rectBases = useRef(
+    new Map<string, { x: number; y: number; w: number; h: number; r: number }>(),
+  );
+  const cardLifts = useRef<number[]>(CARDS.map(() => 0));
+
+  const rebuildRects = () => {
+    const out: UiRectSpec[] = [];
+    rectBases.current.forEach((v, key) => {
+      const lift = key.startsWith('card')
+        ? (cardLifts.current[Number(key.slice(4))] ?? 0)
+        : 0;
+      out.push({
+        cx: (v.x + v.w / 2) * SX,
+        cy: (v.y + lift + v.h / 2) * SY,
+        hw: (v.w / 2 + RECT_INFLATE) * SX,
+        hh: (v.h / 2 + RECT_INFLATE) * SY,
+        r: (v.r + RECT_INFLATE) * SX,
+      });
+    });
+    pond.current.uiRects = out;
+  };
+
+  const measureRect =
+    (key: string, r: number, offsetY = 0) =>
+    (e: LayoutChangeEvent) => {
+      const { x, y, width, height } = e.nativeEvent.layout;
+      rectBases.current.set(key, { x, y: y + offsetY, w: width, h: height, r });
+      rebuildRects();
+    };
   const refreshingRef = useRef(false);
   const lastTick = useRef(0);
   const maxPullSpeed = useRef(0);
@@ -116,9 +154,11 @@ export function PondDemo() {
       const hr = heights[i * 2 + 1] ?? 0;
       const lift = Math.max(-1, Math.min(1, (hl + hr) * 2.2));
       const tilt = Math.max(-1, Math.min(1, (hr - hl) * 3));
+      cardLifts.current[i] = lift * -5;
       bobValues[i].y.setValue(lift * -5);
       bobValues[i].rot.setValue(tilt * 1.6);
     }
+    rebuildRects();
   };
 
   const drop = (x: number, y: number, amp: number, radius: number) => {
@@ -243,16 +283,17 @@ export function PondDemo() {
 
   return (
     <View style={styles.root}>
-      <PondCanvas
-        stateRef={pond}
-        probes={PROBES}
-        onWave={onWave}
-        style={StyleSheet.absoluteFill}
-      />
-
       <View style={styles.header} pointerEvents="none">
-        <Text style={styles.title}>still.</Text>
-        <View style={styles.statusPill}>
+        <View
+          style={styles.titlePlaque}
+          onLayout={measureRect('title', 22, HEADER_TOP)}
+        >
+          <Text style={styles.title}>still.</Text>
+        </View>
+        <View
+          style={styles.statusPill}
+          onLayout={measureRect('pill', 14, HEADER_TOP)}
+        >
           <View
             style={[
               styles.statusDot,
@@ -267,6 +308,7 @@ export function PondDemo() {
         <Animated.View
           key={c.title}
           pointerEvents="none"
+          onLayout={measureRect(`card${i}`, 20)}
           style={[
             styles.card,
             {
@@ -292,9 +334,25 @@ export function PondDemo() {
         </Animated.View>
       ))}
 
-      <Text style={styles.footer} pointerEvents="none">
-        a GPU pond · shaders written in TypeScript · typegpu
-      </Text>
+      <View
+        style={styles.footerPlaque}
+        pointerEvents="none"
+        onLayout={measureRect('footer', 11)}
+      >
+        <Text style={styles.footer}>
+          a GPU pond · shaders written in TypeScript · typegpu
+        </Text>
+      </View>
+
+      {/* The water surface renders ABOVE the UI — content sits under it. */}
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <PondCanvas
+          stateRef={pond}
+          probes={PROBES}
+          onWave={onWave}
+          style={StyleSheet.absoluteFill}
+        />
+      </View>
 
       {/* Invisible scroll layer that captures the pull gesture. */}
       <ScrollView
@@ -321,6 +379,14 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: 'center',
+  },
+  titlePlaque: {
+    backgroundColor: 'rgba(8, 14, 24, 0.6)',
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(159, 216, 255, 0.14)',
+    paddingHorizontal: 24,
+    paddingVertical: 2,
   },
   title: {
     color: '#eef4fc',
@@ -382,11 +448,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 3,
   },
-  footer: {
+  footerPlaque: {
     position: 'absolute',
-    bottom: 34,
+    bottom: 30,
     alignSelf: 'center',
-    color: '#33425c',
+    backgroundColor: 'rgba(8, 14, 24, 0.55)',
+    borderRadius: 11,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  footer: {
+    color: '#3b4d6b',
     fontSize: 11,
     letterSpacing: 0.4,
   },

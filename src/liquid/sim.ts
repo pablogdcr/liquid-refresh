@@ -20,6 +20,18 @@ export const Drop = d.struct({
   radius: d.f32,
 });
 
+// UI elements (cards, title…) the water surface flows OVER. Inside these
+// rounded rects the shader switches from opaque pond to a translucent
+// lighting overlay so the content stays readable underneath.
+export const MAX_RECTS = 8;
+export const UiRect = d.struct({
+  // all in grid coordinates
+  center: d.vec2f,
+  half: d.vec2f,
+  r: d.f32,
+});
+export const RectArray = d.arrayOf(UiRect, MAX_RECTS);
+
 export const SimUniforms = d.struct({
   // wave speed factor c^2*dt^2/dx^2 (stability: <= 0.5)
   k: d.f32,
@@ -48,6 +60,7 @@ export const computeLayout = tgpu.bindGroupLayout({
 export const renderLayout = tgpu.bindGroupLayout({
   uni: { uniform: SimUniforms },
   h: { storage: HeightField, access: 'readonly' },
+  rects: { uniform: RectArray },
 });
 
 export const probeLayout = tgpu.bindGroupLayout({
@@ -116,6 +129,27 @@ export const readProbes = (idx: number) => {
 export const heightAt = (x: number, y: number): number => {
   'use gpu';
   return renderLayout.$.h[cellIndex(x, y)];
+};
+
+// 0 outside all UI rects, 1 inside (anti-aliased rounded-rect SDF union).
+export const uiMask = (p: d.v2f): number => {
+  'use gpu';
+  let m = d.f32(0);
+  for (let i = 0; i < MAX_RECTS; i++) {
+    const rc = renderLayout.$.rects[i];
+    if (rc.r > 0) {
+      const q = std.sub(
+        std.abs(std.sub(p, rc.center)),
+        std.sub(rc.half, d.vec2f(rc.r, rc.r)),
+      );
+      const sd =
+        std.length(std.max(q, d.vec2f(0, 0))) +
+        std.min(std.max(q.x, q.y), 0) -
+        rc.r;
+      m = std.max(m, std.smoothstep(0.75, -0.75, sd));
+    }
+  }
+  return m;
 };
 
 // Bilinear height sample at fractional grid coords — the render pass
