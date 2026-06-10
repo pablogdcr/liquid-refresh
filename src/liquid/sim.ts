@@ -32,6 +32,9 @@ export const SimUniforms = d.struct({
   floorY: d.f32,
   dt: d.f32,
   time: d.f32,
+  // 0..1 — how actively water is pouring in right now (drives the
+  // light beam under the Dynamic Island).
+  pour: d.f32,
 });
 
 export const Particle = d.struct({
@@ -174,6 +177,11 @@ export const sampleDensity = (world: d.v2f): number => {
 
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
+      // Deep interior pixels saturate fast — every shading term clamps
+      // by ~2, so stop gathering once past it.
+      if (density > 2.2) {
+        return density;
+      }
       const cx = c.x + dx;
       const cy = c.y + dy;
       if (cx < 0 || cx >= GX || cy < 0 || cy >= GY) {

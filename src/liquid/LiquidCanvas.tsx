@@ -1,5 +1,5 @@
 import { useMemo, useRef, type RefObject } from 'react';
-import type { StyleProp, ViewStyle } from 'react-native';
+import { PixelRatio, type StyleProp, type ViewStyle } from 'react-native';
 import { Canvas } from 'react-native-wgpu';
 import { common, d, std } from 'typegpu';
 import {
@@ -41,8 +41,19 @@ interface LiquidCanvasProps {
   style?: StyleProp<ViewStyle>;
 }
 
-const SUBSTEPS = 2;
-const DT = 1 / 120;
+const SUBSTEPS = 1;
+// Slightly slower than real time — the water feels heavier, and one
+// substep keeps the JS thread free for scrolling.
+const DT = 1 / 100;
+// Metaballs are soft gradients; rendering at reduced resolution is
+// invisible after compositing and cuts fragment cost ~4x.
+const RESOLUTION_SCALE = 0.45;
+
+// Capture rig: the iOS simulator throttles canvas presents to ~15fps no
+// matter the workload. Setting `globalThis.__SLOWMO = 4` runs the sim at
+// quarter speed — record, then speed the video 4x for a smooth 60fps clip.
+const slowmo = () =>
+  (globalThis as unknown as { __SLOWMO?: number }).__SLOWMO ?? 1;
 
 export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
   const root = useRoot();
@@ -59,6 +70,7 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
       floorY: 1,
       dt: DT,
       time: 0,
+      pour: 0,
     },
   });
 
@@ -147,18 +159,34 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
 
           // Soft cyan halo around droplets and the surface.
           const halo = std.smoothstep(0.1, 0.5, density) * (1 - mask) * 0.16;
-
-          const rgb = std.add(
+          const waterA = std.min(1, alpha + halo);
+          const waterRgb = std.add(
             std.mul(alpha, col),
             std.mul(halo, d.vec3f(0.45, 0.75, 1)),
           );
-          return d.vec4f(rgb, std.min(1, alpha + halo));
+
+          // Scene behind the water: a faint aquarium glow falling from the
+          // top, plus a light beam under the Dynamic Island while pouring.
+          const dxI = world.x - uniR.aspect * 0.5;
+          const beam =
+            std.exp(-dxI * dxI * 14) *
+            std.max(0, 1 - world.y * 1.1) *
+            uniR.pour;
+          const ambient = std.max(0, 1 - world.y * 1.4) * 0.06;
+          const bgA = std.min(0.5, ambient + beam * 0.3);
+          const bgRgb = std.mul(bgA, d.vec3f(0.4, 0.65, 0.95));
+
+          const rgb = std.add(waterRgb, std.mul(1 - waterA, bgRgb));
+          return d.vec4f(rgb, std.min(1, waterA + bgA * (1 - waterA)));
         },
       }),
     [root],
   );
 
-  const { ref, ctxRef } = useConfigureContext({ alphaMode: 'premultiplied' });
+  const { ref, ctxRef } = useConfigureContext({
+    alphaMode: 'premultiplied',
+    autoResize: false,
+  });
   const smoothFill = useRef(0);
 
   useFrame(({ deltaSeconds, elapsedSeconds }) => {
@@ -168,17 +196,34 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
     }
 
     const canvas = ctx.canvas as HTMLCanvasElement;
+    const targetW = Math.max(
+      1,
+      Math.round(canvas.clientWidth * PixelRatio.get() * RESOLUTION_SCALE),
+    );
+    if (canvas.width !== targetW) {
+      canvas.width = targetW;
+      canvas.height = Math.max(
+        1,
+        Math.round(canvas.clientHeight * PixelRatio.get() * RESOLUTION_SCALE),
+      );
+    }
     const aspect = canvas.width / Math.max(1, canvas.height);
     const s = stateRef.current;
 
+    const slow = slowmo();
+
     // Ease the active particle count toward the target so water pours in
     // instead of appearing all at once.
-    smoothFill.current += (s.fill - smoothFill.current) * Math.min(1, deltaSeconds * 6);
+    smoothFill.current +=
+      (s.fill - smoothFill.current) * Math.min(1, (deltaSeconds * 6) / slow);
     if (s.fill === 0 && smoothFill.current < 0.01) {
       smoothFill.current = 0;
     } else if (Math.abs(s.fill - smoothFill.current) < 0.005) {
       smoothFill.current = s.fill;
     }
+
+    // Pour intensity: how far the eased fill is lagging behind the target.
+    const pour = Math.min(1, Math.max(0, (s.fill - smoothFill.current) * 14));
 
     uni.write({
       gravity: d.vec2f(s.gravity.x * GRAVITY, s.gravity.y * GRAVITY),
@@ -186,8 +231,9 @@ export function LiquidCanvas({ stateRef, style }: LiquidCanvasProps) {
       activeCount: Math.round(smoothFill.current * N_PARTICLES),
       drainOpen: s.drainOpen ? 1 : 0,
       floorY: Math.max(0.05, Math.min(1, s.floor)),
-      dt: DT,
-      time: elapsedSeconds,
+      dt: DT / slow,
+      time: elapsedSeconds / slow,
+      pour,
     });
 
     for (let i = 0; i < SUBSTEPS; i++) {

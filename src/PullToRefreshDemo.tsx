@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Animated,
+  LayoutAnimation,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   ScrollView,
@@ -19,26 +21,20 @@ const TRIGGER_PULL = 130;
 // resting water level around half the header.
 const FILL_TARGET = 0.6;
 
-const ACCENTS = {
-  cyan: '#5ad1ff',
-  blue: '#5a8cff',
-  violet: '#9b7bff',
-  teal: '#4fe3c1',
-  amber: '#ffc46b',
-  rose: '#ff7ba9',
-} as const;
+const ICE = '#8fd6ff';
 
-const FEED: ReadonlyArray<
-  readonly [emoji: string, title: string, body: string, accent: keyof typeof ACCENTS]
-> = [
-  ['🌊', 'GPU fluid simulation', '2,000 particles · spatial hashing · 120 Hz', 'cyan'],
-  ['⚡️', 'Shaders in TypeScript', 'TGSL — the same language as the rest of the app', 'amber'],
-  ['📱', 'Runs on iOS and Android', 'WebGPU via react-native-wgpu (Metal / Vulkan)', 'blue'],
-  ['🌀', 'Tilt your phone', 'Gravity comes from the accelerometer', 'violet'],
-  ['💧', 'Pull to pour', 'The pull distance controls how much water pours in', 'teal'],
-  ['🕳', 'Release to refresh', 'The floor opens and the water drains out', 'rose'],
-  ['🧪', 'TypeGPU', 'Type-safe WebGPU toolkit by Software Mansion', 'cyan'],
-  ['🚀', 'Over-engineered?', 'Absolutely.', 'amber'],
+const captureSlowmo = () =>
+  (globalThis as unknown as { __SLOWMO?: number }).__SLOWMO ?? 1;
+
+const FEED: ReadonlyArray<readonly [glyph: string, title: string, body: string]> = [
+  ['≈', 'GPU fluid simulation', '2,000 particles · spatial hashing · compute shaders'],
+  ['</>', 'Shaders in TypeScript', 'TGSL — the same language as the rest of the app'],
+  ['◈', 'Runs on iOS and Android', 'WebGPU via react-native-wgpu (Metal / Vulkan)'],
+  ['◎', 'Tilt your phone', 'Gravity comes from the accelerometer'],
+  ['↓', 'Pull to pour', 'The pull distance controls how much water pours in'],
+  ['◌', 'Release to refresh', 'The floor opens and the water drains out'],
+  ['✱', 'TypeGPU', 'Type-safe WebGPU toolkit by Software Mansion'],
+  ['∞', 'Over-engineered?', 'Absolutely.'],
 ];
 
 export function PullToRefreshDemo() {
@@ -52,6 +48,8 @@ export function PullToRefreshDemo() {
   const refreshingRef = useRef(false);
   const lastTick = useRef(0);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
+  const wetEdge = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     DeviceMotion.setUpdateInterval(50);
@@ -81,6 +79,7 @@ export function PullToRefreshDemo() {
     liquid.current.fill = progress * FILL_TARGET;
     // The floor of the water container is the top edge of the content sheet.
     liquid.current.floor = Math.min(1, pull / HEADER_HEIGHT);
+    wetEdge.setValue(progress);
 
     const tick = Math.floor(progress * 4);
     if (tick !== lastTick.current) {
@@ -99,14 +98,28 @@ export function PullToRefreshDemo() {
       startRefresh();
     } else {
       liquid.current.fill = 0;
+      Animated.timing(wetEdge, {
+        toValue: 0,
+        duration: 350,
+        useNativeDriver: true,
+      }).start();
     }
   };
 
-  const startRefresh = () => {
+  const startRefresh = (fromRig = false) => {
     refreshingRef.current = true;
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setRefreshing(true);
     liquid.current.fill = FILL_TARGET;
     liquid.current.floor = (HEADER_HEIGHT - 56) / HEADER_HEIGHT;
+    if (fromRig) {
+      // A real pull already rests at the inset; the capture rig has to
+      // open the sheet itself, after the inset state has applied.
+      setTimeout(() => {
+        scrollRef.current?.scrollTo({ y: -(HEADER_HEIGHT - 56), animated: true });
+      }, 80);
+    }
+    wetEdge.setValue(1);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     // Pretend to fetch something while the water sloshes around.
@@ -116,16 +129,31 @@ export function PullToRefreshDemo() {
       setLastRefresh(
         new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       );
+      Animated.timing(wetEdge, {
+        toValue: 0,
+        duration: 900,
+        useNativeDriver: true,
+      }).start();
 
       setTimeout(() => {
         liquid.current.fill = 0;
         liquid.current.floor = 0;
         liquid.current.drainOpen = false;
         refreshingRef.current = false;
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         setRefreshing(false);
-      }, 1300);
-    }, 3200);
+      }, 1300 * captureSlowmo());
+    }, 3200 * captureSlowmo());
   };
+
+  useEffect(() => {
+    if (__DEV__) {
+      // Capture rig — lets recording scripts trigger the full refresh
+      // cycle without a gesture (see __SLOWMO in LiquidCanvas).
+      (globalThis as Record<string, unknown>).__startRefresh = () =>
+        startRefresh(true);
+    }
+  });
 
   return (
     <View style={styles.root}>
@@ -133,6 +161,7 @@ export function PullToRefreshDemo() {
         <LiquidCanvas stateRef={liquid} style={StyleSheet.absoluteFill} />
       </View>
       <ScrollView
+        ref={scrollRef}
         style={styles.scroll}
         contentInset={{ top: refreshing ? HEADER_HEIGHT - 56 : 0 }}
         scrollEventThrottle={16}
@@ -141,6 +170,8 @@ export function PullToRefreshDemo() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.content}>
+          {/* Wet edge — the water "touches" the sheet here. */}
+          <Animated.View style={[styles.wetEdge, { opacity: wetEdge }]} />
           <View style={styles.statusRow}>
             <View style={styles.statusPill}>
               <View style={styles.statusDot} />
@@ -156,12 +187,10 @@ export function PullToRefreshDemo() {
             A real fluid simulation in your pull-to-refresh — shaders written
             in TypeScript.
           </Text>
-          {FEED.map(([emoji, title, body, accent]) => (
+          {FEED.map(([glyph, title, body]) => (
             <View key={title} style={styles.card}>
-              <View
-                style={[styles.cardChip, { backgroundColor: `${ACCENTS[accent]}1c` }]}
-              >
-                <Text style={styles.cardEmoji}>{emoji}</Text>
+              <View style={styles.cardChip}>
+                <Text style={styles.cardGlyph}>{glyph}</Text>
               </View>
               <View style={styles.cardText}>
                 <Text style={styles.cardTitle}>{title}</Text>
@@ -197,6 +226,18 @@ const styles = StyleSheet.create({
     paddingTop: 72,
     paddingHorizontal: 20,
     paddingBottom: 64,
+  },
+  wetEdge: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: 'rgba(143, 214, 255, 0.55)',
+    shadowColor: '#5ad1ff',
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 10,
+    shadowOpacity: 0.8,
   },
   statusRow: {
     flexDirection: 'row',
@@ -258,9 +299,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 14,
+    backgroundColor: 'rgba(90, 209, 255, 0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(159, 216, 255, 0.16)',
   },
-  cardEmoji: {
-    fontSize: 20,
+  cardGlyph: {
+    color: ICE,
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: -0.5,
   },
   cardText: {
     flex: 1,
