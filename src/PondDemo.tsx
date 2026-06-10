@@ -3,13 +3,15 @@ import {
   Animated,
   Dimensions,
   type LayoutChangeEvent,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
-  ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { DeviceMotion } from 'expo-sensors';
 import { PondCanvas, type PondState, type UiRectSpec } from './liquid/PondCanvas';
@@ -118,8 +120,7 @@ export function PondDemo() {
     };
   const refreshingRef = useRef(false);
   const lastTick = useRef(0);
-  const maxPullSpeed = useRef(0);
-  const lastPull = useRef({ value: 0, t: 0 });
+  const lastTouch = useRef({ x: DROP_X * W, y: DROP_Y * H });
   const [status, setStatus] = useState<'idle' | 'raining' | 'done'>('idle');
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
 
@@ -165,76 +166,87 @@ export function PondDemo() {
     pond.current.dropQueue.push({ x, y, amp, radius });
   };
 
-  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (refreshingRef.current) {
-      return;
-    }
-    const pull = Math.max(0, -e.nativeEvent.contentOffset.y);
-    const progress = Math.min(1, pull / TRIGGER_PULL);
+  // The finger IS the rock: touching dents the surface, dragging trails
+  // a wake, releasing drops the splash right where the finger was.
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        .runOnJS(true)
+        .maxPointers(1)
+        .minDistance(0)
+        .onBegin((e) => {
+          pond.current.dimpleX = e.x / W;
+          pond.current.dimpleY = e.y / H;
+          pond.current.dimpleAmp = 0.35;
+          lastTouch.current = { x: e.x, y: e.y };
+        })
+        .onUpdate((e) => {
+          const dx = e.x - lastTouch.current.x;
+          const dy = e.y - lastTouch.current.y;
+          const dist = Math.hypot(dx, dy);
 
-    const now = Date.now();
-    const dt = now - lastPull.current.t;
-    if (dt > 0 && dt < 200) {
-      const speed = (pull - lastPull.current.value) / dt; // pt per ms
-      if (speed > maxPullSpeed.current) {
-        maxPullSpeed.current = speed;
-      }
-    }
-    lastPull.current = { value: pull, t: now };
+          pond.current.dimpleX = e.x / W;
+          pond.current.dimpleY = e.y / H;
+          const pullProg = refreshingRef.current
+            ? 0
+            : Math.min(1, Math.max(0, e.translationY) / TRIGGER_PULL);
+          pond.current.dimpleAmp = 0.35 + pullProg * 0.45;
 
-    pond.current.dimpleAmp = progress;
+          // Wake: shed little ripples as the finger moves through.
+          if (dist > 4) {
+            drop(e.x / W, e.y / H, Math.min(0.22, 0.03 + dist * 0.01), 4);
+            lastTouch.current = { x: e.x, y: e.y };
+          }
 
-    const tick = Math.floor(progress * 4);
-    if (tick !== lastTick.current) {
-      lastTick.current = tick;
-      if (tick > 0) {
-        Haptics.selectionAsync();
-      }
-    }
-  };
+          const tick = Math.floor(pullProg * 4);
+          if (!refreshingRef.current && tick !== lastTick.current) {
+            lastTick.current = tick;
+            if (tick > 0) {
+              Haptics.selectionAsync();
+            }
+          }
+        })
+        .onFinalize((e) => {
+          if (pond.current.dimpleAmp === 0) {
+            return;
+          }
+          pond.current.dimpleAmp = 0;
 
-  const onRelease = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (refreshingRef.current) {
-      return;
-    }
-    const pull = Math.max(0, -e.nativeEvent.contentOffset.y);
-    const strength = Math.min(1, pull / TRIGGER_PULL);
-    const speed = maxPullSpeed.current;
-    maxPullSpeed.current = 0;
-    pond.current.dimpleAmp = 0;
+          const fx = e.x / W;
+          const fy = e.y / H;
+          const pull = Math.max(0, e.translationY);
+          const strength = Math.min(1, pull / TRIGGER_PULL);
+          // velocityY is pt/s at release: the "thrown from high" factor.
+          const thrown = Math.min(1, Math.max(0, e.velocityY) / 2400);
+          const amp = 0.18 + strength * 0.7 + thrown * 0.7;
+          drop(fx, fy, amp, 5 + strength * 5 + thrown * 3);
+          Haptics.impactAsync(
+            amp > 0.9
+              ? Haptics.ImpactFeedbackStyle.Heavy
+              : Haptics.ImpactFeedbackStyle.Light,
+          );
 
-    if (strength < 0.08) {
-      return;
-    }
+          // A hard throw splashes back: droplets chasing the first ring.
+          const extras = Math.round(thrown * 4);
+          for (let i = 1; i <= extras; i++) {
+            setTimeout(() => {
+              drop(
+                fx + (Math.random() - 0.5) * 0.16,
+                fy + (Math.random() - 0.5) * 0.1,
+                amp * 0.3,
+                5,
+              );
+              Haptics.selectionAsync();
+            }, (90 + i * 110) * captureSlowmo());
+          }
 
-    // The rock lands: gentle set-down vs full throw.
-    const thrown = Math.min(1, speed / 2.2);
-    const amp = 0.25 + strength * 0.7 + thrown * 0.6;
-    drop(DROP_X, DROP_Y, amp, 7 + strength * 6);
-    Haptics.impactAsync(
-      amp > 0.9
-        ? Haptics.ImpactFeedbackStyle.Heavy
-        : Haptics.ImpactFeedbackStyle.Light,
-    );
-
-    // A hard throw splashes back: secondary droplets chasing the first ring.
-    const extras = Math.round(thrown * 4);
-    for (let i = 1; i <= extras; i++) {
-      setTimeout(() => {
-        drop(
-          DROP_X + (Math.random() - 0.5) * 0.16,
-          DROP_Y + (Math.random() - 0.5) * 0.1,
-          amp * 0.3,
-          5,
-        );
-        Haptics.selectionAsync();
-      }, (90 + i * 110) * captureSlowmo());
-    }
-
-    if (pull >= TRIGGER_PULL) {
-      startRefresh();
-    }
-  };
+          if (!refreshingRef.current && pull >= TRIGGER_PULL) {
+            startRefresh();
+          }
+        }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   const startRefresh = () => {
     refreshingRef.current = true;
@@ -282,7 +294,7 @@ export function PondDemo() {
         : 'pull to drop';
 
   return (
-    <View style={styles.root}>
+    <GestureHandlerRootView style={styles.root}>
       <View style={styles.header} pointerEvents="none">
         <View
           style={styles.titlePlaque}
@@ -354,17 +366,11 @@ export function PondDemo() {
         />
       </View>
 
-      {/* Invisible scroll layer that captures the pull gesture. */}
-      <ScrollView
-        style={StyleSheet.absoluteFill}
-        contentContainerStyle={{ height: H + 1 }}
-        scrollEventThrottle={16}
-        onScroll={onScroll}
-        onScrollEndDrag={onRelease}
-        showsVerticalScrollIndicator={false}
-        alwaysBounceVertical
-      />
-    </View>
+      {/* Touch layer: the finger interacts directly with the water. */}
+      <GestureDetector gesture={pan}>
+        <View style={StyleSheet.absoluteFill} />
+      </GestureDetector>
+    </GestureHandlerRootView>
   );
 }
 
